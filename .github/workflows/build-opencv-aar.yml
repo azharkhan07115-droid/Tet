@@ -1,0 +1,127 @@
+name: Build OpenCV AAR
+
+on:
+  workflow_dispatch:   # Actions tab me "Run workflow" button se chalega
+
+permissions:
+  contents: write      # Release banane ke liye zaroori
+
+env:
+  OPENCV_VERSION: "4.9.0"
+
+jobs:
+  build-aar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.5"
+
+      - name: Download OpenCV Android SDK
+        run: |
+          wget -q "https://github.com/opencv/opencv/releases/download/${OPENCV_VERSION}/opencv-${OPENCV_VERSION}-android-sdk.zip"
+          unzip -q "opencv-${OPENCV_VERSION}-android-sdk.zip"
+          ls OpenCV-android-sdk/sdk
+
+      - name: Create Gradle library project
+        run: |
+          SDK="$GITHUB_WORKSPACE/OpenCV-android-sdk/sdk"
+          mkdir -p aarproj/opencv/src/main
+          cd aarproj
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "opencv-aar"
+          include ':opencv'
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.library' version '8.2.2' apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx3g
+          EOF
+
+          cat > opencv/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+          EOF
+
+          cat > opencv/build.gradle <<EOF
+          plugins {
+              id 'com.android.library'
+          }
+          android {
+              namespace 'org.opencv'
+              compileSdk 34
+              defaultConfig {
+                  minSdk 21
+              }
+              buildFeatures {
+                  aidl true
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+              sourceSets {
+                  main {
+                      java.srcDirs = ['$SDK/java/src']
+                      aidl.srcDirs = ['$SDK/java/src']
+                      res.srcDirs = ['$SDK/java/res']
+                      jniLibs.srcDirs = ['$SDK/native/libs']
+                  }
+              }
+          }
+          EOF
+
+      - name: Build AAR
+        working-directory: aarproj
+        run: gradle :opencv:assembleRelease --no-daemon
+
+      - name: Rename AAR
+        run: |
+          mkdir -p output
+          cp aarproj/opencv/build/outputs/aar/opencv-release.aar "output/opencv-${OPENCV_VERSION}.aar"
+          ls -lh output
+
+      - name: Upload as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencv-aar
+          path: output/opencv-${{ env.OPENCV_VERSION }}.aar
+
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="opencv-${OPENCV_VERSION}-aar"
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          gh release create "$TAG" "output/opencv-${OPENCV_VERSION}.aar" \
+            --title "OpenCV ${OPENCV_VERSION} AAR" \
+            --notes "Auto-built AAR from the official OpenCV ${OPENCV_VERSION} Android SDK."
