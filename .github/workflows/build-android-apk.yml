@@ -1,0 +1,62 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:   # Actions tab me "Run workflow" button se chalega
+  push:
+    branches: [ main, master ]
+
+permissions:
+  contents: write      # Release banane ke liye zaroori
+
+env:
+  # Agar tumhara Android project repo ke kisi folder ke andar hai
+  # (jahan gradlew / settings.gradle hai), to yahan us folder ka naam likho.
+  # Repo ke root me hai to "." rehne do.
+  PROJECT_DIR: "."
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --stacktrace
+          else
+            gradle assembleDebug --stacktrace
+          fi
+
+      - name: Collect APK
+        run: |
+          mkdir -p output
+          find "$PROJECT_DIR" -path "*build/outputs/apk/debug/*.apk" -exec cp {} output/ \;
+          ls -lh output
+
+      - name: Upload as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: output/*.apk
+
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="apk-build-${{ github.run_number }}"
+          gh release create "$TAG" output/*.apk \
+            --title "APK build #${{ github.run_number }}" \
+            --notes "Auto-built debug APK from commit ${{ github.sha }}"
