@@ -2,17 +2,12 @@ name: Build Android APK
 
 on:
   workflow_dispatch:   # Actions tab me "Run workflow" button se chalega
-  push:
-    branches: [ main, master ]
 
 permissions:
   contents: write      # Release banane ke liye zaroori
 
 env:
-  # Agar tumhara Android project repo ke kisi folder ke andar hai
-  # (jahan gradlew / settings.gradle hai), to yahan us folder ka naam likho.
-  # Repo ke root me hai to "." rehne do.
-  PROJECT_DIR: "."
+  OPENCV_VERSION: "4.9.0"
 
 jobs:
   build-apk:
@@ -21,15 +16,135 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Find Android project (zip ho to unzip bhi karega)
+        run: |
+          find_project() {
+            find . -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+              -not -path "*/.git/*" -not -path "*/node_modules/*" | head -n 1
+          }
+
+          SETTINGS="$(find_project)"
+
+          if [ -z "$SETTINGS" ]; then
+            echo "Settings file nahi mili, zip files check kar raha hu..."
+            i=0
+            for z in $(find . -type f -name "*.zip" -not -path "*/.git/*"); do
+              i=$((i+1))
+              echo "Unzipping $z"
+              unzip -q -o "$z" -d "unzipped_$i" || true
+            done
+            SETTINGS="$(find_project)"
+          fi
+
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::Repo me Android project nahi mila (settings.gradle missing). Pura project upload karo."
+            ls -R | head -n 80
+            exit 1
+          fi
+
+          PROJECT_DIR="$(cd "$(dirname "$SETTINGS")" && pwd)"
+          echo "Project mila: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          ls -la "$PROJECT_DIR"
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
 
+      # ---------- OpenCV AAR banao ----------
+      - name: Download OpenCV Android SDK
+        run: |
+          wget -q "https://github.com/opencv/opencv/releases/download/${OPENCV_VERSION}/opencv-${OPENCV_VERSION}-android-sdk.zip"
+          unzip -q "opencv-${OPENCV_VERSION}-android-sdk.zip" -d "$RUNNER_TEMP/ocv"
+          ls "$RUNNER_TEMP/ocv/OpenCV-android-sdk/sdk"
+
+      - name: Create OpenCV library project
+        run: |
+          SDK="$RUNNER_TEMP/ocv/OpenCV-android-sdk/sdk"
+          mkdir -p "$RUNNER_TEMP/aarproj/opencv/src/main"
+          cd "$RUNNER_TEMP/aarproj"
+
+          cat > settings.gradle <<'EOT'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "opencv-aar"
+          include ':opencv'
+          EOT
+
+          cat > build.gradle <<'EOT'
+          plugins {
+              id 'com.android.library' version '8.2.2' apply false
+          }
+          EOT
+
+          cat > gradle.properties <<'EOT'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx3g
+          EOT
+
+          cat > opencv/src/main/AndroidManifest.xml <<'EOT'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+          EOT
+
+          cat > opencv/build.gradle <<EOT
+          plugins {
+              id 'com.android.library'
+          }
+          android {
+              namespace 'org.opencv'
+              compileSdk 34
+              defaultConfig {
+                  minSdk 21
+              }
+              buildFeatures {
+                  aidl true
+                  buildConfig true
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+              sourceSets {
+                  main {
+                      java.srcDirs = ['$SDK/java/src']
+                      aidl.srcDirs = ['$SDK/java/src']
+                      res.srcDirs = ['$SDK/java/res']
+                      jniLibs.srcDirs = ['$SDK/native/libs']
+                  }
+              }
+          }
+          EOT
+
+      - name: Build OpenCV AAR
+        working-directory: ${{ runner.temp }}/aarproj
+        run: gradle :opencv:assembleRelease --no-daemon
+
+      - name: Put AAR in app/libs
+        run: |
+          mkdir -p "$PROJECT_DIR/app/libs"
+          cp "$RUNNER_TEMP/aarproj/opencv/build/outputs/aar/opencv-release.aar" \
+             "$PROJECT_DIR/app/libs/opencv-${OPENCV_VERSION}.aar"
+          ls -lh "$PROJECT_DIR/app/libs"
+
+      # ---------- App ka APK banao ----------
       - name: Build debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
