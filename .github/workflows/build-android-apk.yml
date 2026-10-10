@@ -6,9 +6,6 @@ on:
 permissions:
   contents: write      # Release banane ke liye zaroori
 
-env:
-  OPENCV_VERSION: "4.9.0"
-
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -58,91 +55,15 @@ jobs:
         with:
           gradle-version: "8.7"
 
-      # ---------- OpenCV AAR banao ----------
-      - name: Download OpenCV Android SDK
+      # ---------- C++ (NDK) tools - OpenCV ab nahi chahiye ----------
+      - name: Install NDK + CMake for the C++ vision
         run: |
-          wget -q "https://github.com/opencv/opencv/releases/download/${OPENCV_VERSION}/opencv-${OPENCV_VERSION}-android-sdk.zip"
-          unzip -q "opencv-${OPENCV_VERSION}-android-sdk.zip" -d "$RUNNER_TEMP/ocv"
-          ls "$RUNNER_TEMP/ocv/OpenCV-android-sdk/sdk"
-
-      - name: Create OpenCV library project
-        run: |
-          SDK="$RUNNER_TEMP/ocv/OpenCV-android-sdk/sdk"
-          mkdir -p "$RUNNER_TEMP/aarproj/opencv/src/main"
-          cd "$RUNNER_TEMP/aarproj"
-
-          cat > settings.gradle <<'EOT'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          rootProject.name = "opencv-aar"
-          include ':opencv'
-          EOT
-
-          cat > build.gradle <<'EOT'
-          plugins {
-              id 'com.android.library' version '8.2.2' apply false
-          }
-          EOT
-
-          cat > gradle.properties <<'EOT'
-          android.useAndroidX=true
-          org.gradle.jvmargs=-Xmx3g
-          EOT
-
-          cat > opencv/src/main/AndroidManifest.xml <<'EOT'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android" />
-          EOT
-
-          cat > opencv/build.gradle <<EOT
-          plugins {
-              id 'com.android.library'
-          }
-          android {
-              namespace 'org.opencv'
-              compileSdk 34
-              defaultConfig {
-                  minSdk 21
-              }
-              buildFeatures {
-                  aidl true
-                  buildConfig true
-              }
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_1_8
-                  targetCompatibility JavaVersion.VERSION_1_8
-              }
-              sourceSets {
-                  main {
-                      java.srcDirs = ['$SDK/java/src']
-                      aidl.srcDirs = ['$SDK/java/src']
-                      res.srcDirs = ['$SDK/java/res']
-                      jniLibs.srcDirs = ['$SDK/native/libs']
-                  }
-              }
-          }
-          EOT
-
-      - name: Build OpenCV AAR
-        working-directory: ${{ runner.temp }}/aarproj
-        run: gradle :opencv:assembleRelease --no-daemon
-
-      - name: Put AAR in app/libs
-        run: |
-          mkdir -p "$PROJECT_DIR/app/libs"
-          cp "$RUNNER_TEMP/aarproj/opencv/build/outputs/aar/opencv-release.aar" \
-             "$PROJECT_DIR/app/libs/opencv-${OPENCV_VERSION}.aar"
-          ls -lh "$PROJECT_DIR/app/libs"
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n 1)"
+          [ -z "$SDKMANAGER" ] && SDKMANAGER="$(command -v sdkmanager)"
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "ndk;26.1.10909125" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
 
       # ---------- App ka APK banao ----------
       - name: Build debug APK
@@ -174,4 +95,4 @@ jobs:
           TAG="apk-build-${{ github.run_number }}"
           gh release create "$TAG" output/*.apk \
             --title "APK build #${{ github.run_number }}" \
-            --notes "Auto-built debug APK from commit ${{ github.sha }}"
+            --notes "Auto-built debug APK (C++ vision, no OpenCV) from commit ${{ github.sha }}"
