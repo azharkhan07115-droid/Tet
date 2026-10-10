@@ -50,10 +50,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Gradle 8.7
+      - name: Setup Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.7"
+          gradle-version: "8.11.1"
 
       # ---------- C++ (NDK) tools - OpenCV ab nahi chahiye ----------
       - name: Install NDK + CMake for the C++ vision
@@ -63,7 +63,7 @@ jobs:
           [ -z "$SDKMANAGER" ] && SDKMANAGER="$(command -v sdkmanager)"
           echo "sdkmanager: $SDKMANAGER"
           yes | "$SDKMANAGER" --licenses > /dev/null || true
-          "$SDKMANAGER" --install "ndk;26.1.10909125" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+          "$SDKMANAGER" --install "ndk;26.1.10909125" "cmake;3.22.1" "platforms;android-36" "build-tools;36.0.0"
 
       # ---------- App ka APK banao ----------
       - name: Build debug APK
