@@ -65,24 +65,6 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" --install "ndk;26.1.10909125" "cmake;3.22.1" "platforms;android-36" "build-tools;36.0.0"
 
-      # ---------- Real keystore secrets (optional) ----------
-      # Agar yeh 4 repo secrets set hain (Settings -> Secrets and variables -> Actions):
-      #   KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
-      # to build.gradle khud real keystore se sign karega (recommended - updates ke liye same
-      # key chahiye hoti hai, warna purani install ke upar nayi APK install nahi hogi).
-      # Nahi hain to APK unsigned banega aur neeche ek throwaway ad-hoc key se sign hoga
-      # (sirf is run ke liye - agli build me key badal jayegi).
-      - name: Decode keystore (if provided)
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
-          echo "KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
-          echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
-          echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> "$GITHUB_ENV"
-          echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> "$GITHUB_ENV"
-
       # ---------- App ka Release APK banao (R8 + native stripping on) ----------
       - name: Build release APK
         working-directory: ${{ env.PROJECT_DIR }}
@@ -94,7 +76,10 @@ jobs:
             gradle assembleRelease --stacktrace
           fi
 
-      - name: Collect APK (sign with throwaway key if no real keystore)
+      # Koi keystore secret nahi chahiye - har run me ek nayi throwaway key se sign hoti hai,
+      # sirf isliye taki APK phone par install ho jaye. Har build alag key se signed hogi,
+      # isliye update install nahi hoga - purani APK pehle uninstall karke nayi install karna.
+      - name: Collect APK (sign with a throwaway key so it installs)
         run: |
           mkdir -p output
           APK="$(find "$PROJECT_DIR" -path "*build/outputs/apk/release/*.apk" | head -n 1)"
@@ -102,17 +87,12 @@ jobs:
             echo "::error::Koi release APK nahi mili, build step fail hui hogi."
             exit 1
           fi
-          if [[ "$APK" == *unsigned* ]]; then
-            echo "No real keystore secrets - signing with a throwaway ad-hoc key (install-only, not for updates)."
-            BUILD_TOOLS="$(ls -d "${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"/build-tools/* | sort -V | tail -n 1)"
-            keytool -genkeypair -v -keystore "$RUNNER_TEMP/adhoc.keystore" -storepass android123 \
-              -keypass android123 -alias adhoc -keyalg RSA -keysize 2048 -validity 3650 \
-              -dname "CN=CI Build, OU=CI, O=CI, L=CI, S=CI, C=IN"
-            "$BUILD_TOOLS/apksigner" sign --ks "$RUNNER_TEMP/adhoc.keystore" --ks-pass pass:android123 \
-              --ks-key-alias adhoc --key-pass pass:android123 --out output/app-release.apk "$APK"
-          else
-            cp "$APK" output/app-release.apk
-          fi
+          BUILD_TOOLS="$(ls -d "${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"/build-tools/* | sort -V | tail -n 1)"
+          keytool -genkeypair -v -keystore "$RUNNER_TEMP/adhoc.keystore" -storepass android123 \
+            -keypass android123 -alias adhoc -keyalg RSA -keysize 2048 -validity 3650 \
+            -dname "CN=CI Build, OU=CI, O=CI, L=CI, S=CI, C=IN"
+          "$BUILD_TOOLS/apksigner" sign --ks "$RUNNER_TEMP/adhoc.keystore" --ks-pass pass:android123 \
+            --ks-key-alias adhoc --key-pass pass:android123 --out output/app-release.apk "$APK"
           ls -lh output
 
       - name: Upload as artifact
